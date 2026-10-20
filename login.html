@@ -65,13 +65,13 @@
     btn.disabled = true;
     msg.textContent = "구글 로그인 창을 여는 중…";
     const provider = new GoogleAuthProvider();
+    // 폰 Chrome 은 third-party storage 분리 때문에 redirect 결과를 잃는다(github.io ≠ firebaseapp.com) → 팝업 먼저, 막히면 redirect
     try {
-      if (isMobile) {
-        await signInWithRedirect(auth, provider);
-      } else {
-        await finish(await signInWithPopup(auth, provider));
-      }
+      await finish(await signInWithPopup(auth, provider));
     } catch (e) {
+      if (isMobile && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) {
+        try { await signInWithRedirect(auth, provider); return; } catch (e2) { e = e2; }
+      }
       msg.innerHTML = '<span class="err">실패: ' + (e.code || e.message) + '</span>';
       btn.disabled = false;
     }
