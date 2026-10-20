@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>유자의 전설 — 구글 계정 연동</title>
+<style>
+  body { margin:0; font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; background:#15110d; color:#f3e9d6; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+  .card { background:#1f1812; border:3px solid #c9a860; border-radius:18px; padding:28px 26px; max-width:420px; width:90%; box-shadow:0 12px 40px rgba(0,0,0,.5); text-align:center; }
+  h1 { font-size:24px; margin:0 0 6px; color:#ffe9b5; }
+  p { line-height:1.5; color:#d9cbb0; font-size:15px; }
+  button { margin-top:14px; width:100%; padding:14px; font-size:17px; border-radius:12px; border:2px solid #c9a860; background:#2e2318; color:#fff5e0; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .ok { color:#9fe3a8; font-weight:bold; font-size:18px; }
+  .err { color:#ff9a8c; }
+  .small { font-size:12px; color:#8f8370; margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>유자의 전설</h1>
+  <p id="msg">구글 계정으로 들어가면 탑 랭킹과 클라우드 저장을 쓸 수 있어요.</p>
+  <button id="btn">Google 계정으로 계속</button>
+  <div class="small">이 창은 게임이 열었습니다. 끝나면 게임으로 돌아가세요.</div>
+</div>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+  import { getFirestore, doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+  // 게임의 net/firebase.gd CONFIG 와 같은 값
+  const firebaseConfig = window.YUJA_FIREBASE || {
+    apiKey: "AIzaSyCDqi4GhzbIaAZYfqc5nhxFRSZW9Qa2Xas",
+    authDomain: "yujalegend.firebaseapp.com",
+    projectId: "yujalegend",
+  };
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const params = new URLSearchParams(location.search);
+  const session = params.get("s") || "";
+  const msg = document.getElementById("msg");
+  const btn = document.getElementById("btn");
+  const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+
+  if (!session || session.length < 16) {
+    msg.innerHTML = '<span class="err">세션이 없어요. 게임에서 「구글 계정 연동」을 다시 눌러 주세요.</span>';
+    btn.disabled = true;
+  }
+
+  async function finish(result) {
+    const cred = GoogleAuthProvider.credentialFromResult(result);
+    const idToken = cred && cred.idToken;
+    if (!idToken) throw new Error("no id token");
+    await setDoc(doc(db, "login_sessions", session), {
+      id_token: idToken,
+      email: result.user.email || "",
+      created: serverTimestamp(),
+    });
+    btn.style.display = "none";
+    msg.innerHTML = '<span class="ok">연동됐어요!</span><br>이제 게임으로 돌아가세요. (이 창은 닫아도 됩니다)';
+  }
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    msg.textContent = "구글 로그인 창을 여는 중…";
+    const provider = new GoogleAuthProvider();
+    try {
+      if (isMobile) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        await finish(await signInWithPopup(auth, provider));
+      }
+    } catch (e) {
+      msg.innerHTML = '<span class="err">실패: ' + (e.code || e.message) + '</span>';
+      btn.disabled = false;
+    }
+  };
+
+  getRedirectResult(auth).then(async (result) => {
+    if (result && result.user) {
+      try { await finish(result); } catch (e) { msg.innerHTML = '<span class="err">실패: ' + e.message + '</span>'; }
+    }
+  }).catch(() => {});
+</script>
+</body>
+</html>
