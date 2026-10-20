@@ -25,63 +25,69 @@
 </div>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-  import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
   import { getFirestore, doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-  // 게임의 net/firebase.gd CONFIG 와 같은 값
+  // 구글 OAuth 를 직접(OpenID Connect implicit, id_token) — Firebase Auth JS 의 팝업/리디렉션은 폰 브라우저(네이버 인앱·Chrome 저장소 분리)에서 결과를 잃는다.
+  // 세션은 state 로 실어 보내므로 브라우저 저장소가 없어도 돌아온다. 게임은 이 id_token 으로 signInWithIdp 한다.
   const firebaseConfig = window.YUJA_FIREBASE || {
     apiKey: "AIzaSyCDqi4GhzbIaAZYfqc5nhxFRSZW9Qa2Xas",
     authDomain: "yujalegend.firebaseapp.com",
     projectId: "yujalegend",
   };
+  const CLIENT_ID = "186362786177-cc1i3ume2grbfrgfq7qae13t0kn8uri1.apps.googleusercontent.com";
   const app = initializeApp(firebaseConfig);
-  const auth = getAuth(app);
   const db = getFirestore(app);
-  const params = new URLSearchParams(location.search);
-  const session = params.get("s") || "";
   const msg = document.getElementById("msg");
   const btn = document.getElementById("btn");
-  const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+  const redirectUri = location.origin + location.pathname;
+
+  function parseHash() {
+    const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+    return { idToken: h.get("id_token") || "", state: h.get("state") || "", error: h.get("error") || "" };
+  }
+  function emailOf(idToken) {
+    try { return JSON.parse(atob(idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).email || ""; } catch (e) { return ""; }
+  }
+  const back = parseHash();
+  const session = back.state || new URLSearchParams(location.search).get("s") || "";
 
   if (!session || session.length < 16) {
     msg.innerHTML = '<span class="err">세션이 없어요. 게임에서 「구글 계정 연동」을 다시 눌러 주세요.</span>';
     btn.disabled = true;
   }
 
-  async function finish(result) {
-    const cred = GoogleAuthProvider.credentialFromResult(result);
-    const idToken = cred && cred.idToken;
-    if (!idToken) throw new Error("no id token");
+  async function finish(idToken) {
     await setDoc(doc(db, "login_sessions", session), {
       id_token: idToken,
-      email: result.user.email || "",
+      email: emailOf(idToken),
       created: serverTimestamp(),
     });
     btn.style.display = "none";
     msg.innerHTML = '<span class="ok">연동됐어요!</span><br>이제 게임으로 돌아가세요. (이 창은 닫아도 됩니다)';
+    history.replaceState(null, "", redirectUri + "?s=" + session + "&done=1");
   }
 
-  btn.onclick = async () => {
+  btn.onclick = () => {
     btn.disabled = true;
-    msg.textContent = "구글 로그인 창을 여는 중…";
-    const provider = new GoogleAuthProvider();
-    // 폰 Chrome 은 third-party storage 분리 때문에 redirect 결과를 잃는다(github.io ≠ firebaseapp.com) → 팝업 먼저, 막히면 redirect
-    try {
-      await finish(await signInWithPopup(auth, provider));
-    } catch (e) {
-      if (isMobile && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) {
-        try { await signInWithRedirect(auth, provider); return; } catch (e2) { e = e2; }
-      }
-      msg.innerHTML = '<span class="err">실패: ' + (e.code || e.message) + '</span>';
-      btn.disabled = false;
-    }
+    msg.textContent = "구글 로그인으로 가는 중…";
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, "0")).join("");
+    const q = new URLSearchParams({
+      client_id: CLIENT_ID, redirect_uri: redirectUri, response_type: "id_token",
+      scope: "openid email profile", nonce: nonce, state: session, prompt: "select_account",
+    });
+    location.href = "https://accounts.google.com/o/oauth2/v2/auth?" + q.toString();
   };
 
-  getRedirectResult(auth).then(async (result) => {
-    if (result && result.user) {
-      try { await finish(result); } catch (e) { msg.innerHTML = '<span class="err">실패: ' + e.message + '</span>'; }
-    }
-  }).catch(() => {});
+  if (back.error) {
+    msg.innerHTML = '<span class="err">실패: ' + back.error + '</span>';
+  } else if (back.idToken && session) {
+    btn.disabled = true;
+    msg.textContent = "게임에 알리는 중…";
+    finish(back.idToken).catch(e => { msg.innerHTML = '<span class="err">실패: ' + (e.code || e.message) + '</span>'; });
+  } else if (new URLSearchParams(location.search).get("done") === "1") {
+    btn.style.display = "none";
+    msg.innerHTML = '<span class="ok">연동됐어요!</span><br>이제 게임으로 돌아가세요.';
+  }
 </script>
 </body>
 </html>
