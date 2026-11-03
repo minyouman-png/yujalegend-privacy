@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>유자의 전설 — 계정 삭제 / Delete account</title>
+<style>
+  body { margin:0; font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; background:#15110d; color:#f3e9d6; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+  .card { background:#1f1812; border:3px solid #c9a860; border-radius:18px; padding:28px 26px; max-width:460px; width:90%; box-shadow:0 12px 40px rgba(0,0,0,.5); text-align:center; }
+  h1 { font-size:24px; margin:0 0 6px; color:#ffe9b5; }
+  p, li { line-height:1.5; color:#d9cbb0; font-size:15px; text-align:left; }
+  ul { padding-left:1.2em; margin:8px 0; }
+  button { margin-top:14px; width:100%; padding:14px; font-size:17px; border-radius:12px; border:2px solid #c9a860; background:#2e2318; color:#fff5e0; cursor:pointer; }
+  button.danger { border-color:#d9705a; background:#3a1d18; }
+  button:disabled { opacity:.5; }
+  .ok { color:#9fe3a8; font-weight:bold; font-size:18px; }
+  .err { color:#ff9a8c; }
+  .small { font-size:12px; color:#8f8370; margin-top:18px; }
+  a { color:#ffb347; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>유자의 전설 — 계정 삭제</h1>
+  <p id="msg">게임에 연동한 구글 계정으로 로그인하면 계정과 관련 데이터를 바로 지울 수 있어요. 게임 안에서는 타이틀 → 「계정: 닉네임」 → 「계정 삭제」로도 할 수 있습니다.</p>
+  <ul id="what" style="display:none">
+    <li>지워지는 것: 구글 계정 연동 정보(이메일), 닉네임, 클라우드 저장, 무한탑 기록, 전체 채팅에 쓴 글, 차단 목록, Firebase 계정</li>
+    <li>남는 것: 기기 안의 저장(게임을 지우기 전까지)</li>
+    <li>되돌릴 수 없어요. 같은 구글 계정으로 다시 연동하면 새 계정으로 시작합니다.</li>
+  </ul>
+  <button id="btn">Google 계정으로 로그인</button>
+  <button id="del" class="danger" style="display:none">정말 지우기 / Delete my account</button>
+  <div class="small">English: sign in with the Google account linked to the game to delete your account and all related data (e-mail, nickname, cloud save, tower records, chat messages, block list). This cannot be undone. Questions: <a href="mailto:minyouman@gmail.com">minyouman@gmail.com</a> · <a href="index.html">개인정보처리방침</a></div>
+</div>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+  import { getAuth, signInWithCredential, GoogleAuthProvider, deleteUser } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+  import { getFirestore, doc, getDoc, deleteDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+  // 로그인은 login.html 과 같은 구글 OAuth 직접(id_token implicit) → Firebase 에 signInWithCredential(방금 로그인이라 계정 삭제의 '최근 로그인' 조건도 만족).
+  const firebaseConfig = { apiKey: "AIzaSyCDqi4GhzbIaAZYfqc5nhxFRSZW9Qa2Xas", authDomain: "yujalegend.firebaseapp.com", projectId: "yujalegend" };
+  const CLIENT_ID = "186362786177-cc1i3ume2grbfrgfq7qae13t0kn8uri1.apps.googleusercontent.com";
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const msg = document.getElementById("msg"), btn = document.getElementById("btn"), del = document.getElementById("del"), what = document.getElementById("what");
+  const redirectUri = location.origin + location.pathname;
+  // 탑 시즌(net/season.gd 와 같음): 2026-10-20 00:00 KST 부터 4주씩 S1, S2 …
+  const EPOCH = 1792422000, LENGTH = 28 * 86400;
+  const idx = Math.max(0, Math.floor((Date.now() / 1000 - EPOCH) / LENGTH));
+  const seasons = [...new Set(["S" + (idx + 1), "S" + Math.max(1, idx)])];
+
+  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const idToken = h.get("id_token") || "", error = h.get("error") || "";
+  let user = null;
+
+  btn.onclick = () => {
+    btn.disabled = true;
+    msg.textContent = "구글 로그인으로 가는 중…";
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, "0")).join("");
+    const q = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: redirectUri, response_type: "id_token", scope: "openid email", nonce, state: "delete", prompt: "select_account" });
+    location.href = "https://accounts.google.com/o/oauth2/v2/auth?" + q.toString();
+  };
+
+  async function signedIn(tok) {
+    btn.disabled = true;
+    msg.textContent = "계정을 확인하는 중…";
+    const cred = GoogleAuthProvider.credential(tok);
+    const r = await signInWithCredential(auth, cred);
+    user = r.user;
+    history.replaceState(null, "", redirectUri);
+    const u = await getDoc(doc(db, "users", user.uid));
+    const nick = u.exists() ? (u.data().nick || "") : "";
+    msg.innerHTML = "<b>" + (user.email || "") + "</b>" + (nick ? " · 닉네임 「" + nick + "」" : " · (게임에 연동된 적 없는 계정)") + "<br>아래 단추를 누르면 바로 지웁니다.";
+    btn.style.display = "none";
+    what.style.display = "";
+    del.style.display = "";
+  }
+
+  del.onclick = async () => {
+    if (!user) return;
+    if (!confirm("정말 계정과 관련 데이터를 모두 지울까요? 되돌릴 수 없어요.")) return;
+    del.disabled = true;
+    const uid = user.uid;
+    try {
+      msg.textContent = "글을 지우는 중…";
+      const qs = await getDocs(query(collection(db, "chat"), where("uid", "==", uid)));
+      for (const d of qs.docs) await deleteDoc(d.ref);
+      msg.textContent = "기록을 지우는 중…";
+      for (const s of seasons) await deleteDoc(doc(db, "tower", s, "ranks", uid)).catch(() => {});
+      await deleteDoc(doc(db, "saves", uid)).catch(() => {});
+      await deleteDoc(doc(db, "blocks", uid)).catch(() => {});
+      const u = await getDoc(doc(db, "users", uid));
+      const nl = u.exists() ? (u.data().nick_lower || (u.data().nick || "").toLowerCase()) : "";
+      if (nl) await deleteDoc(doc(db, "nicks", nl)).catch(() => {});
+      await deleteDoc(doc(db, "users", uid)).catch(() => {});
+      msg.textContent = "계정을 지우는 중…";
+      await deleteUser(user);
+      user = null;
+      what.style.display = "none";
+      del.style.display = "none";
+      msg.innerHTML = '<span class="ok">계정을 지웠어요.</span><br>기기 안의 저장은 남아 있어 로그인 없이 이어서 할 수 있습니다. 게임이 켜져 있다면 다시 시작해 주세요.';
+    } catch (e) {
+      del.disabled = false;
+      msg.innerHTML = '<span class="err">실패: ' + (e.code || e.message) + '</span><br>다시 시도하거나 minyouman@gmail.com 으로 알려 주세요.';
+    }
+  };
+
+  if (error) {
+    msg.innerHTML = '<span class="err">실패: ' + error + '</span>';
+  } else if (idToken) {
+    signedIn(idToken).catch(e => { btn.disabled = false; msg.innerHTML = '<span class="err">실패: ' + (e.code || e.message) + '</span>'; });
+  }
+</script>
+</body>
+</html>
